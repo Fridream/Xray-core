@@ -136,8 +136,16 @@ func (rr *RoutingRule) BuildCondition() (Condition, error) {
 		conds.Add(NewProcessNameMatcher(rr.Process))
 	}
 
+	if len(rr.Time) > 0 {
+		cond, err := NewTimeMatcher(rr.Time)
+		if err != nil {
+			return nil, err
+		}
+		conds.Add(cond)
+	}
+
 	if conds.Len() == 0 {
-		return nil, errors.New("this rule has no effective fields").AtWarning()
+		return conds, errors.New("this rule has no effective fields").AtWarning()
 	}
 
 	return conds, nil

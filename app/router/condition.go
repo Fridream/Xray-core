@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
@@ -425,6 +426,87 @@ func (m *ProcessNameMatcher) Apply(ctx routing.Context) bool {
 	}
 	for _, f := range m.Folders {
 		if strings.HasPrefix(absPath, f) {
+			return true
+		}
+	}
+	return false
+}
+
+// timeRange represents a range of minutes-of-day, e.g. 20:30-01:00 is
+// {startMin: 1230, endMin: 60}. When startMin > endMin the range wraps
+// across midnight.
+type timeRange struct {
+	startMin int
+	endMin   int
+}
+
+func (r timeRange) contains(curMin int) bool {
+	if r.startMin < r.endMin {
+		return curMin >= r.startMin && curMin < r.endMin
+	}
+	// wraps midnight, e.g. 20:30-01:00
+	return curMin >= r.startMin || curMin < r.endMin
+}
+
+// parseClock parses a "15:04" (or "15:4") style clock string into minutes
+// since 00:00.
+func parseClock(s string) (int, error) {
+	s = strings.TrimSpace(s)
+	t, err := time.Parse("15:04", s)
+	if err != nil {
+		return 0, errors.New("invalid time value: ", s).Base(err)
+	}
+	return t.Hour()*60 + t.Minute(), nil
+}
+
+func parseTimeRange(s string) (timeRange, error) {
+	s = strings.TrimSpace(s)
+	parts := strings.SplitN(s, "-", 2)
+	if len(parts) != 2 {
+		return timeRange{}, errors.New("invalid time range, want \"HH:MM-HH:MM\", got: ", s)
+	}
+	startMin, err := parseClock(parts[0])
+	if err != nil {
+		return timeRange{}, err
+	}
+	endMin, err := parseClock(parts[1])
+	if err != nil {
+		return timeRange{}, err
+	}
+	if startMin == endMin {
+		return timeRange{}, errors.New("invalid time range, start and end must not be equal: ", s)
+	}
+	return timeRange{startMin: startMin, endMin: endMin}, nil
+}
+
+// TimeMatcher matches the current local time of day against a list of
+// configured time ranges, e.g. ["20:30-1:00", "6:00-8:00"]. The condition
+// passes if the current time falls into ANY of the ranges (OR semantics,
+// consistent with how domain/ip lists are matched elsewhere in this file).
+type TimeMatcher struct {
+	ranges []timeRange
+}
+
+// NewTimeMatcher builds a TimeMatcher from a list of "HH:MM-HH:MM" strings.
+func NewTimeMatcher(times []string) (*TimeMatcher, error) {
+	ranges := make([]timeRange, 0, len(times))
+	for _, t := range times {
+		r, err := parseTimeRange(t)
+		if err != nil {
+			return nil, err
+		}
+		ranges = append(ranges, r)
+	}
+	return &TimeMatcher{ranges: ranges}, nil
+}
+
+// Apply implements Condition. It does not depend on the routing context,
+// only on the current wall-clock time of the machine running Xray.
+func (m *TimeMatcher) Apply(ctx routing.Context) bool {
+	now := time.Now()
+	curMin := now.Hour()*60 + now.Minute()
+	for _, r := range m.ranges {
+		if r.contains(curMin) {
 			return true
 		}
 	}

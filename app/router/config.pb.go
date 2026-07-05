@@ -484,8 +484,11 @@ type RoutingRule struct {
 	VlessRouteList *net.PortList     `protobuf:"bytes,20,opt,name=vless_route_list,json=vlessRouteList,proto3" json:"vless_route_list,omitempty"`
 	Process        []string          `protobuf:"bytes,21,rep,name=process,proto3" json:"process,omitempty"`
 	Webhook        *WebhookConfig    `protobuf:"bytes,22,opt,name=webhook,proto3" json:"webhook,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// List of time ranges (e.g. "20:30-1:00") for time-of-day matching.
+	// A rule matches if the current local time falls into any of the ranges.
+	Time          []string `protobuf:"bytes,23,rep,name=time,proto3" json:"time,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RoutingRule) Reset() {
@@ -651,6 +654,13 @@ func (x *RoutingRule) GetProcess() []string {
 func (x *RoutingRule) GetWebhook() *WebhookConfig {
 	if x != nil {
 		return x.Webhook
+	}
+	return nil
+}
+
+func (x *RoutingRule) GetTime() []string {
+	if x != nil {
+		return x.Time
 	}
 	return nil
 }
@@ -1134,7 +1144,7 @@ const file_app_router_config_proto_rawDesc = "" +
 	"\fcountry_code\x18\x01 \x01(\tR\vcountryCode\x12/\n" +
 	"\x06domain\x18\x02 \x03(\v2\x17.xray.app.router.DomainR\x06domain\"=\n" +
 	"\vGeoSiteList\x12.\n" +
-	"\x05entry\x18\x01 \x03(\v2\x18.xray.app.router.GeoSiteR\x05entry\"\xbc\a\n" +
+	"\x05entry\x18\x01 \x03(\v2\x18.xray.app.router.GeoSiteR\x05entry\"\xd0\a\n" +
 	"\vRoutingRule\x12\x12\n" +
 	"\x03tag\x18\x01 \x01(\tH\x00R\x03tag\x12%\n" +
 	"\rbalancing_tag\x18\f \x01(\tH\x00R\fbalancingTag\x12\x19\n" +
@@ -1159,7 +1169,8 @@ const file_app_router_config_proto_rawDesc = "" +
 	"\x0flocal_port_list\x18\x12 \x01(\v2\x19.xray.common.net.PortListR\rlocalPortList\x12C\n" +
 	"\x10vless_route_list\x18\x14 \x01(\v2\x19.xray.common.net.PortListR\x0evlessRouteList\x12\x18\n" +
 	"\aprocess\x18\x15 \x03(\tR\aprocess\x128\n" +
-	"\awebhook\x18\x16 \x01(\v2\x1e.xray.app.router.WebhookConfigR\awebhook\x1a=\n" +
+	"\awebhook\x18\x16 \x01(\v2\x1e.xray.app.router.WebhookConfigR\awebhook\x12\x12\n" +
+	"\x04time\x18\x17 \x03(\tR\x04time\x1a=\n" +
 	"\x0fAttributesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\f\n" +

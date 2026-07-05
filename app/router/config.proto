@@ -115,6 +115,10 @@ message RoutingRule {
   xray.common.net.PortList vless_route_list = 20;
   repeated string process = 21;
   WebhookConfig webhook = 22;
+
+  // List of time ranges (e.g. "20:30-1:00") for time-of-day matching.
+  // A rule matches if the current local time falls into any of the ranges.
+  repeated string time = 23;
 }
 
 message WebhookConfig {

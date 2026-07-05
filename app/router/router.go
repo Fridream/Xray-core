@@ -54,9 +54,9 @@ func (r *Router) Init(ctx context.Context, config *Config, d dns.Client, ohm out
 	}
 
 	r.rules = make([]*Rule, 0, len(config.Rule))
-	for _, rule := range config.Rule {
+	for i, rule := range config.Rule {
 		cond, err := rule.BuildCondition()
-		if err != nil {
+		if err != nil && i != len(config.Rule)-1 {
 			r.closeWebhooks()
 			return err
 		}
@@ -157,13 +157,13 @@ func (r *Router) ReloadRules(config *Config, shouldAppend bool) error {
 		r.rules = r.rules[:startIdx]
 	}
 
-	for _, rule := range config.Rule {
+	for i, rule := range config.Rule {
 		if r.RuleExists(rule.GetRuleTag()) {
 			closeNewWebhooks()
 			return errors.New("duplicate ruleTag ", rule.GetRuleTag())
 		}
 		cond, err := rule.BuildCondition()
-		if err != nil {
+		if err != nil && i != len(config.Rule)-1 {
 			closeNewWebhooks()
 			return err
 		}
