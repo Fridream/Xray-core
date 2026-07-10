@@ -386,13 +386,134 @@ func (s *DNS) serialQuery(domain string, option dns.IPOption) ([]net.IP, uint32,
 	return nil, 0, mergeQueryErrors(domain, errs)
 }
 
+// groupCacheLookup merges cached results from every client of a group.
+// Clients with fresh records are preferred; when the group only holds
+// expired records served under the serve-stale policy, those clients are
+// used instead. The selected clients are queried through the normal QueryIP
+// path, which answers from cache immediately — for stale records it serves
+// optimistically and triggers the background refresh by itself. It returns
+// ok=false when no client in the group has a usable cached record.
+// When serving from cache, members without a usable cached record are
+// queried in the background (not awaited) so their caches get populated
+// for future lookups.
+func (s *DNS) groupCacheLookup(domain string, option dns.IPOption, clients []*Client, g group) ([]net.IP, uint32, bool) {
+	var freshIdx, staleIdx, missIdx []int
+	for j := g.start; j <= g.end; j++ {
+		client := clients[j]
+		if option.FakeEnable && strings.EqualFold(client.Name(), "FakeDNS") {
+			// FakeDNS answers instantly from local memory and must win its
+			// group, as in the original race — serve it directly instead of
+			// racing, which also avoids the goroutine-scheduling gamble that
+			// could otherwise let a cached real IP bypass it.
+			ips, ttl, err := client.QueryIP(s.ctx, domain, option)
+			if err == nil && len(ips) > 0 {
+				errors.LogDebug(s.ctx, "domain ", domain, " served FakeDNS from group [", g.start, "..", g.end, "]")
+				return ips, ttl, true
+			}
+			continue
+		}
+		fresh, ok := client.CachePeek(domain, option)
+		if !ok {
+			missIdx = append(missIdx, j)
+			continue
+		}
+		if fresh {
+			freshIdx = append(freshIdx, j)
+		} else {
+			staleIdx = append(staleIdx, j)
+		}
+	}
+
+	hitIdx := freshIdx
+	if len(hitIdx) == 0 {
+		hitIdx = staleIdx
+	} else {
+		// Serving fresh results: stale members still need renewing. A
+		// background QueryIP on them answers from the optimistic cache
+		// (discarded) and triggers the nameserver's own refresh.
+		missIdx = append(missIdx, staleIdx...)
+	}
+	if len(hitIdx) == 0 {
+		return nil, 0, false
+	}
+
+	var merged []net.IP
+	seen := make(map[string]bool)
+	var minTTL uint32
+	for _, j := range hitIdx {
+		ips, ttl, err := clients[j].QueryIP(s.ctx, domain, option)
+		if err != nil || len(ips) == 0 {
+			continue
+		}
+		if minTTL == 0 || ttl < minTTL {
+			minTTL = ttl
+		}
+		for _, ip := range ips {
+			key := string(ip)
+			if !seen[key] {
+				seen[key] = true
+				merged = append(merged, ip)
+			}
+		}
+	}
+
+	if len(merged) == 0 {
+		return nil, 0, false
+	}
+
+	// Serving from cache: members without a usable cached record still fire
+	// their queries in the background (not awaited) so their caches get
+	// populated for future lookups. Servers with cache disabled are skipped —
+	// warming them is pointless.
+	for _, j := range missIdx {
+		s.warmClient(domain, option, clients[j])
+	}
+
+	errors.LogDebug(s.ctx, "domain ", domain, " returning ", len(merged), " merged cached IP(s) from DNS group [", g.start, "..", g.end, "] -> ", merged)
+	return merged, minTTL, true
+}
+
+// warmClient fires a background (not awaited) query so the client's cache
+// gets populated (or, for a stale record, renewed via the optimistic path).
+// Concurrent warm-ups for the same domain are merged into one in-flight
+// request by the nameserver's singleflight group. FakeDNS and cache-disabled
+// servers are skipped — warming them is pointless.
+func (s *DNS) warmClient(domain string, option dns.IPOption, client *Client) {
+	if strings.EqualFold(client.Name(), "FakeDNS") || client.server.IsDisableCache() {
+		return
+	}
+	go func(c *Client) {
+		qctx, cancel := context.WithTimeout(context.WithoutCancel(s.ctx), c.timeoutMs*2)
+		defer cancel()
+		c.QueryIP(qctx, domain, option)
+	}(client)
+}
+
 func (s *DNS) parallelQuery(domain string, option dns.IPOption) ([]net.IP, uint32, error) {
 	var errs []error
 	clients := s.sortClients(domain)
 
+	groups, groupOf := makeGroups( /*s.ctx,*/ clients)
+
+	// Cache-first: walk groups in priority order and serve the first one
+	// holding usable cache (a group containing FakeDNS serves its fake IP
+	// directly). The race only starts when no group can serve. When a
+	// lower-priority group serves, every higher-priority group (which by
+	// definition could not serve) is warmed in the background so subsequent
+	// lookups return to the preferred group.
+	for gi, g := range groups {
+		if ips, ttl, ok := s.groupCacheLookup(domain, option, clients, g); ok {
+			for k := 0; k < gi; k++ {
+				for j := groups[k].start; j <= groups[k].end; j++ {
+					s.warmClient(domain, option, clients[j])
+				}
+			}
+			return ips, ttl, nil
+		}
+	}
+
 	resultsChan := asyncQueryAll(domain, option, clients, s.ctx)
 
-	groups, groupOf := makeGroups( /*s.ctx,*/ clients)
 	results := make([]*queryResult, len(clients))
 	pending := make([]int, len(groups))
 	for gi, g := range groups {
@@ -462,7 +583,14 @@ func asyncQueryAll(domain string, option dns.IPOption, clients []*Client, ctx co
 			continue
 		}
 
+		// Handshake so that queries are dispatched in the sorted client
+		// order: the next goroutine is not spawned until this one has
+		// started running. Without this, the Go scheduler's runnext slot
+		// makes the last-spawned goroutine run first, so queries were
+		// consistently fired in near-reverse configuration order.
+		started := make(chan struct{})
 		go func(i int, c *Client) {
+			close(started)
 			qctx := ctx
 			if !c.server.IsDisableCache() {
 				nctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.timeoutMs*2)
@@ -472,6 +600,7 @@ func asyncQueryAll(domain string, option dns.IPOption, clients []*Client, ctx co
 			ips, ttl, err := c.QueryIP(qctx, domain, option)
 			ch <- queryResult{ips: ips, ttl: ttl, err: err, index: i}
 		}(i, client)
+		<-started
 	}
 	return ch
 }

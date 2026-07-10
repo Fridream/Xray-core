@@ -318,6 +318,53 @@ func (c *Client) QueryIP(ctx context.Context, domain string, option dns.IPOption
 	return ips, ttl, nil
 }
 
+// CachePeek reports whether the nameserver holds a usable positive cached
+// record for the domain, without sending any query. fresh is false when the
+// record is expired but would still be served under the serve-stale
+// (optimistic cache) policy. A peeked client's QueryIP is guaranteed* to
+// answer from cache immediately (*barring expiry in the microseconds between
+// peek and query).
+func (c *Client) CachePeek(domain string, option dns.IPOption) (fresh bool, ok bool) {
+	cached, isCached := c.server.(CachedNameserver)
+	if !isCached {
+		return false, false
+	}
+	cache := cached.getCacheController()
+	if cache.disableCache {
+		return false, false
+	}
+
+	if c.checkSystem {
+		supportIPv4, supportIPv6 := checkRoutes()
+		option.IPv4Enable = option.IPv4Enable && supportIPv4
+		option.IPv6Enable = option.IPv6Enable && supportIPv6
+	} else {
+		option.IPv4Enable = option.IPv4Enable && c.ipOption.IPv4Enable
+		option.IPv6Enable = option.IPv6Enable && c.ipOption.IPv6Enable
+	}
+
+	if !option.IPv4Enable && !option.IPv6Enable {
+		return false, false
+	}
+
+	rec := cache.findRecords(Fqdn(domain))
+	if rec == nil {
+		return false, false
+	}
+	ips, ttl, err := merge(option, rec.A, rec.AAAA)
+	if err != nil || len(ips) == 0 {
+		return false, false
+	}
+	if ttl > 0 {
+		return true, true
+	}
+	// Expired record, usable under the optimistic cache policy
+	if cache.serveStale && (cache.serveExpiredTTL == 0 || cache.serveExpiredTTL < ttl) {
+		return false, true
+	}
+	return false, false
+}
+
 func ResolveIpOptionOverride(queryStrategy QueryStrategy, ipOption dns.IPOption) dns.IPOption {
 	switch queryStrategy {
 	case QueryStrategy_USE_IP:
