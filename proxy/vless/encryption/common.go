@@ -27,9 +27,11 @@ var OutBytesPool = sync.Pool{
 type CommonConn struct {
 	net.Conn
 	UseAES      bool
+	KeyLen      int
 	Client      *ClientInstance
 	UnitedKey   []byte
 	PreWrite    []byte
+	Salt        []byte
 	AEAD        *AEAD
 	PeerAEAD    *AEAD
 	PeerPadding []byte
@@ -64,7 +66,7 @@ func (c *CommonConn) Write(b []byte) (int, error) {
 		}
 		c.AEAD.Seal(headerAndData[:5], nil, b, headerAndData[:5])
 		if max {
-			c.AEAD = NewAEAD(headerAndData, c.UnitedKey, c.UseAES)
+			c.AEAD = NewAEAD(headerAndData, c.UnitedKey, c.UseAES, c.KeyLen)
 		}
 		if c.PreWrite != nil {
 			headerAndData = append(c.PreWrite, headerAndData...)
@@ -82,11 +84,16 @@ func (c *CommonConn) Read(b []byte) (int, error) {
 		return 0, nil
 	}
 	if c.PeerAEAD == nil { // client's 0-RTT
-		serverRandom := make([]byte, 16)
+		serverRandomLen := 16
+		if c.KeyLen != 0 {
+			serverRandomLen = c.KeyLen
+		}
+		serverRandom := make([]byte, serverRandomLen)
 		if _, err := io.ReadFull(c.Conn, serverRandom); err != nil {
 			return 0, err
 		}
-		c.PeerAEAD = NewAEAD(serverRandom, c.UnitedKey, c.UseAES)
+		saltM := append(append(make([]byte, 0, c.KeyLen*2), serverRandom...), c.Salt...)
+		c.PeerAEAD = NewAEAD(saltM, c.UnitedKey, c.UseAES, c.KeyLen)
 		if xorConn, ok := c.Conn.(*XorConn); ok {
 			xorConn.PeerCTR = NewCTR(c.UnitedKey, serverRandom)
 		}
@@ -133,7 +140,7 @@ func (c *CommonConn) Read(b []byte) (int, error) {
 	}
 	var newAEAD *AEAD
 	if bytes.Equal(c.PeerAEAD.Nonce[:], MaxNonce) {
-		newAEAD = NewAEAD(append(peerHeader[:], peerData...), c.UnitedKey, c.UseAES)
+		newAEAD = NewAEAD(append(peerHeader[:], peerData...), c.UnitedKey, c.UseAES, c.KeyLen)
 	}
 	_, err = c.PeerAEAD.Open(dst[:0], nil, peerData, peerHeader[:])
 	if newAEAD != nil {
@@ -154,8 +161,12 @@ type AEAD struct {
 	Nonce [12]byte
 }
 
-func NewAEAD(ctx, key []byte, useAES bool) *AEAD {
-	k := make([]byte, 32)
+func NewAEAD(ctx, key []byte, useAES bool, opts ...int) *AEAD {
+	keyLen := 32
+	if len(opts) > 0 && opts[0] != 0 {
+		keyLen = opts[0]
+	}
+	k := make([]byte, keyLen)
 	blake3.DeriveKey(k, string(ctx), key)
 	var aead cipher.AEAD
 	if useAES {

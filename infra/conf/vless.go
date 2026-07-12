@@ -94,6 +94,20 @@ func (c *VLessInboundConfig) Build() (proto.Message, error) {
 	config.Decryption = c.Decryption
 	if !func() bool {
 		s := strings.Split(config.Decryption, ".")
+		if s[0] == "psk" {
+			if len(s) != 3 {
+				return false
+			}
+			switch s[1] {
+			case "aes-128-gcm", "aes-256-gcm", "chacha20-poly1305":
+			default:
+				return false
+			}
+			if _, err := base64.RawURLEncoding.DecodeString(s[2]); err != nil {
+				return false
+			}
+			return true
+		}
 		if len(s) < 4 || s[0] != "mlkem768x25519plus" {
 			return false
 		}
@@ -320,6 +334,20 @@ func (c *VLessOutboundConfig) Build() (proto.Message, error) {
 
 			if !func() bool {
 				s := strings.Split(account.Encryption, ".")
+				if s[0] == "psk" {
+					if len(s) != 3 {
+						return false
+					}
+					switch s[1] {
+					case "aes-128-gcm", "aes-256-gcm", "chacha20-poly1305":
+					default:
+						return false
+					}
+					if _, err := base64.RawURLEncoding.DecodeString(s[2]); err != nil {
+						return false
+					}
+					return true
+				}
 				if len(s) < 4 || s[0] != "mlkem768x25519plus" {
 					return false
 				}

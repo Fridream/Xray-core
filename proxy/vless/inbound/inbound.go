@@ -79,6 +79,7 @@ type Handler struct {
 	stats                  stats.Manager
 	validator              vless.Validator
 	decryption             *encryption.ServerInstance
+	symDecryption          *encryption.SymmetricServer
 	outboundHandlerManager outbound.Manager
 	observer               features.Feature
 	defaultDispatcher      routing.Dispatcher
@@ -101,7 +102,13 @@ func New(ctx context.Context, config *Config, dc dns.Client, validator vless.Val
 		ctx:                    ctx,
 	}
 
-	if config.Decryption != "" && config.Decryption != "none" {
+	if strings.HasPrefix(config.Decryption, "psk.") {
+		s := strings.Split(config.Decryption, ".")
+		psk, err := base64.RawURLEncoding.DecodeString(s[2])
+		if handler.symDecryption, err = encryption.NewSymmetricServer(s[1], psk); err != nil {
+			return nil, errors.New("failed to use decryption").Base(err).AtError()
+		}
+	} else if config.Decryption != "" && config.Decryption != "none" {
 		s := strings.Split(config.Decryption, ".")
 		var nfsSKeysBytes [][]byte
 		for _, r := range s {
@@ -271,7 +278,12 @@ func (*Handler) Network() []net.Network {
 func (h *Handler) Process(ctx context.Context, network net.Network, connection stat.Connection, dispatch routing.Dispatcher) error {
 	iConn := stat.TryUnwrapStatsConn(connection)
 
-	if h.decryption != nil {
+	if h.symDecryption != nil {
+		var err error
+		if connection, err = h.symDecryption.Handshake(connection, nil); err != nil {
+			return errors.New("VLESS PSK handshake failed").Base(err).AtInfo()
+		}
+	} else if h.decryption != nil {
 		var err error
 		if connection, err = h.decryption.Handshake(connection, nil); err != nil {
 			return errors.New("ML-KEM-768 handshake failed").Base(err).AtInfo()

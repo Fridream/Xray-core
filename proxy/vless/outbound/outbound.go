@@ -53,6 +53,7 @@ type Handler struct {
 	policyManager policy.Manager
 	cone          bool
 	encryption    *encryption.ClientInstance
+	symEncryption *encryption.SymmetricClient
 	reverse       *Reverse
 
 	testpre  uint32
@@ -83,7 +84,13 @@ func New(ctx context.Context, config *Config) (*Handler, error) {
 	}
 
 	a := handler.server.User.Account.(*vless.MemoryAccount)
-	if a.Encryption != "" && a.Encryption != "none" {
+	if strings.HasPrefix(a.Encryption, "psk.") {
+		s := strings.Split(a.Encryption, ".")
+		psk, err := base64.RawURLEncoding.DecodeString(s[2])
+		if handler.symEncryption, err = encryption.NewSymmetricClient(s[1], psk); err != nil {
+			return nil, errors.New("failed to use encryption").Base(err).AtError()
+		}
+	} else if a.Encryption != "" && a.Encryption != "none" {
 		s := strings.Split(a.Encryption, ".")
 		var nfsPKeysBytes [][]byte
 		for _, r := range s {
@@ -208,7 +215,12 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 	target := ob.Target
 	errors.LogInfo(ctx, "tunneling request to ", target, " via ", rec.Destination.NetAddr())
 
-	if h.encryption != nil {
+	if h.symEncryption != nil {
+		var err error
+		if conn, err = h.symEncryption.Handshake(conn); err != nil {
+			return errors.New("VLESS PSK handshake failed").Base(err).AtInfo()
+		}
+	} else if h.encryption != nil {
 		var err error
 		if conn, err = h.encryption.Handshake(conn); err != nil {
 			return errors.New("ML-KEM-768 handshake failed").Base(err).AtInfo()
