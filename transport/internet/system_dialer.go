@@ -119,6 +119,9 @@ func (d *DefaultSystemDialer) Dial(ctx context.Context, src net.Address, dest ne
 	if sockopt != nil || len(d.controllers) > 0 {
 		if sockopt != nil && sockopt.TcpMptcp {
 			dialer.SetMultipathTCP(true)
+			if dialer.LocalAddr == nil && dest.Network == net.Network_TCP {
+				dialer.LocalAddr = &net.TCPAddr{IP: make([]byte, net.IPv6len)}
+			}
 		}
 		dialer.Control = func(network, address string, c syscall.RawConn) error {
 			for _, ctl := range d.controllers {
