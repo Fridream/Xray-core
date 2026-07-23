@@ -1068,6 +1068,8 @@ type SocketConfig struct {
 	TCPCongestion         string                 `json:"tcpCongestion"`
 	TCPWindowClamp        int32                  `json:"tcpWindowClamp"`
 	TCPMaxSeg             int32                  `json:"tcpMaxSeg"`
+	TCPConnectTimeout     int32                  `json:"tcpConnectTimeout"`
+	TCPConnectRetry       int32                  `json:"tcpConnectRetry"`
 	Penetrate             bool                   `json:"penetrate"`
 	TCPUserTimeout        int32                  `json:"tcpUserTimeout"`
 	V6only                bool                   `json:"v6only"`
@@ -1188,6 +1190,8 @@ func (c *SocketConfig) Build() (*internet.SocketConfig, error) {
 		TcpCongestion:        c.TCPCongestion,
 		TcpWindowClamp:       c.TCPWindowClamp,
 		TcpMaxSeg:            c.TCPMaxSeg,
+		TcpConnectTimeout:    c.TCPConnectTimeout,
+		TcpConnectRetry:      c.TCPConnectRetry,
 		Penetrate:            c.Penetrate,
 		TcpUserTimeout:       c.TCPUserTimeout,
 		V6Only:               c.V6only,

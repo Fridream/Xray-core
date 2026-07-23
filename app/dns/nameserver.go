@@ -355,7 +355,7 @@ func (c *Client) CachePeek(domain string, option dns.IPOption) (fresh bool, ok b
 	if err != nil || len(ips) == 0 {
 		return false, false
 	}
-	if ttl > 0 {
+	if ttl > 1 {
 		return true, true
 	}
 	// Expired record, usable under the optimistic cache policy

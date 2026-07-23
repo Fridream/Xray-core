@@ -438,20 +438,24 @@ func (s *DNS) groupCacheLookup(domain string, option dns.IPOption, clients []*Cl
 	}
 
 	var merged []net.IP
-	seen := make(map[string]bool)
-	var minTTL uint32
+	var minTTL uint32 = dns.DefaultTTL
 	for _, j := range hitIdx {
 		ips, ttl, err := clients[j].QueryIP(s.ctx, domain, option)
 		if err != nil || len(ips) == 0 {
 			continue
 		}
-		if minTTL == 0 || ttl < minTTL {
+		if ttl < minTTL {
 			minTTL = ttl
 		}
 		for _, ip := range ips {
-			key := string(ip)
-			if !seen[key] {
-				seen[key] = true
+			found := false
+			for _, m := range merged {
+				if m.Equal(ip) {
+					found = true
+					break
+				}
+			}
+			if !found {
 				merged = append(merged, ip)
 			}
 		}

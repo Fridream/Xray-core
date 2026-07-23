@@ -160,6 +160,10 @@ message SocketConfig {
   HappyEyeballsConfig happy_eyeballs = 22;
 
   repeated string trusted_x_forwarded_for = 23;
+
+  int32 tcp_connect_timeout = 24;
+
+  int32 tcp_connect_retry = 25;
 }
 
 message HappyEyeballsConfig {

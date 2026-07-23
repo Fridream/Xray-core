@@ -86,6 +86,10 @@ func (d *DefaultSystemDialer) Dial(ctx context.Context, src net.Address, dest ne
 			Dest:       destAddr,
 		}, nil
 	}
+	connectTimeout := time.Second * 16
+	if sockopt != nil && sockopt.TcpConnectTimeout > 0 {
+		connectTimeout = time.Millisecond * time.Duration(sockopt.TcpConnectTimeout)
+	}
 	// Chrome defaults
 	keepAliveConfig := net.KeepAliveConfig{
 		Enable:   true,
@@ -110,7 +114,7 @@ func (d *DefaultSystemDialer) Dial(ctx context.Context, src net.Address, dest ne
 		}
 	}
 	dialer := &net.Dialer{
-		Timeout:         time.Second * 16,
+		Timeout:         connectTimeout,
 		LocalAddr:       resolveSrcAddr(dest.Network, src),
 		KeepAlive:       keepAlive,
 		KeepAliveConfig: keepAliveConfig,
@@ -144,7 +148,30 @@ func (d *DefaultSystemDialer) Dial(ctx context.Context, src net.Address, dest ne
 		}
 	}
 
-	return dialer.DialContext(ctx, dest.Network.SystemString(), dest.NetAddr())
+	network := dest.Network.SystemString()
+	address := dest.NetAddr()
+	var connectRetry int32 = 1
+	if sockopt != nil && sockopt.TcpConnectRetry != 0 {
+		connectRetry = sockopt.TcpConnectRetry
+	}
+
+	var lastErr error
+	for attempt := int32(1); connectRetry < 0 || attempt <= connectRetry; attempt++ {
+		conn, err := dialer.DialContext(ctx, network, address)
+		if err == nil {
+			return conn, nil
+		}
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		if nerr, ok := err.(net.Error); !ok || !nerr.Timeout() {
+			return nil, err
+		}
+		lastErr = err
+		errors.LogDebug(ctx, "tcp connect attempt ", attempt, " timed out")
+	}
+
+	return nil, lastErr
 }
 
 func (d *DefaultSystemDialer) DestIpAddress() net.IP {
