@@ -26,72 +26,48 @@ func TcpRaceDial(ctx context.Context, src net.Address, ips []net.IP, port net.Po
 	ips = sortIPs(ips, prioritizeIPv6, interleave)
 	newCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	var resultCh = make(chan *result, len(ips))
+	var resultCh = make(chan *result)
 	nextTryIndex := 0
 	activeNum := uint32(0)
 	timer := time.NewTimer(0)
-	var winConn net.Conn
+	timeUp := func() {
+		if nextTryIndex == len(ips) || activeNum == maxConcurrentTry {
+			panic("impossible situation")
+		}
+		go tcpTryDial(newCtx, src, sockopt, ips[nextTryIndex], port, nextTryIndex, resultCh)
+		activeNum++
+		nextTryIndex++
+		if nextTryIndex < len(ips) && activeNum < maxConcurrentTry {
+			timer.Reset(tryDelayMs)
+		}
+	}
 	errors.LogDebug(ctx, "happy eyeballs racing dial for ", domain, " with IPs ", ips)
 	for {
 		select {
+		case <-timer.C:
+			timeUp()
+		case <-ctx.Done():
+			cancel()
+			timer.Stop()
+			return nil, ctx.Err()
 		case r := <-resultCh:
 			activeNum--
-			select {
-			case <-ctx.Done():
+			if r.conn != nil {
 				cancel()
 				timer.Stop()
-				if winConn != nil {
-					winConn.Close()
-				}
-				if r.conn != nil {
-					r.conn.Close()
-				}
-				if activeNum == 0 {
-					return nil, ctx.Err()
-				}
-				continue
-			default:
-				if r.conn != nil {
-					cancel()
-					timer.Stop()
-					if winConn == nil {
-						winConn = r.conn
-						errors.LogDebug(ctx, "happy eyeballs established connection for ", domain, " with IP ", ips[r.index])
-					} else {
-						r.conn.Close()
-					}
-				}
-				if winConn != nil && activeNum == 0 {
-					return winConn, nil
-				}
-				if winConn != nil {
-					continue
-				}
-				if nextTryIndex < len(ips) {
-					timer.Reset(0)
-					continue
-				}
-				if activeNum == 0 {
-					errors.LogDebugInner(ctx, r.err, "happy eyeballs no connection established for ", domain)
-					return nil, r.err
-				}
+				errors.LogDebug(ctx, "happy eyeballs established connection for ", domain, " with IP ", ips[r.index])
+				return r.conn, nil
+			}
+			if nextTryIndex < len(ips) {
 				timer.Stop()
+				timeUp()
 				continue
 			}
-
-		case <-timer.C:
-			if nextTryIndex == len(ips) || activeNum == maxConcurrentTry {
-				panic("impossible situation")
+			if activeNum > 0 {
+				continue
 			}
-			go tcpTryDial(newCtx, src, sockopt, ips[nextTryIndex], port, nextTryIndex, resultCh)
-			activeNum++
-			nextTryIndex++
-			if nextTryIndex == len(ips) || activeNum == maxConcurrentTry {
-				timer.Stop()
-			} else {
-				timer.Reset(tryDelayMs)
-			}
-			continue
+			errors.LogDebugInner(ctx, r.err, "happy eyeballs no connection established for ", domain)
+			return nil, r.err
 		}
 	}
 }
@@ -158,18 +134,10 @@ func sortIPs(ips []net.IP, prioritizeIPv6 bool, interleave uint32) []net.IP {
 func tcpTryDial(ctx context.Context, src net.Address, sockopt *SocketConfig, ip net.IP, port net.Port, index int, resultCh chan<- *result) {
 	conn, err := effectiveSystemDialer.Dial(ctx, src, net.Destination{Address: net.IPAddress(ip), Network: net.Network_TCP, Port: port}, sockopt)
 	select {
+	case resultCh <- &result{conn: conn, err: err, index: index}:
 	case <-ctx.Done():
 		if conn != nil {
 			conn.Close()
 		}
-		resultCh <- &result{err: ctx.Err(), index: index}
-		return
-	default:
-		if err != nil {
-			resultCh <- &result{err: err, index: index}
-			return
-		}
-		resultCh <- &result{conn: conn, index: index}
-		return
 	}
 }

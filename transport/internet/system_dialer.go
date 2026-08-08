@@ -86,9 +86,16 @@ func (d *DefaultSystemDialer) Dial(ctx context.Context, src net.Address, dest ne
 			Dest:       destAddr,
 		}, nil
 	}
-	connectTimeout := time.Second * 16
+	dialerTimeout := time.Second * 16
+	connectTimeout := dialerTimeout
+	connectRetry := int32(1)
 	if sockopt != nil && sockopt.TcpConnectTimeout > 0 {
 		connectTimeout = time.Millisecond * time.Duration(sockopt.TcpConnectTimeout)
+		if sockopt.TcpConnectRetry < 2 {
+			dialerTimeout = connectTimeout
+		} else {
+			connectRetry = sockopt.TcpConnectRetry
+		}
 	}
 	// Chrome defaults
 	keepAliveConfig := net.KeepAliveConfig{
@@ -114,7 +121,7 @@ func (d *DefaultSystemDialer) Dial(ctx context.Context, src net.Address, dest ne
 		}
 	}
 	dialer := &net.Dialer{
-		Timeout:         connectTimeout,
+		Timeout:         dialerTimeout,
 		LocalAddr:       resolveSrcAddr(dest.Network, src),
 		KeepAlive:       keepAlive,
 		KeepAliveConfig: keepAliveConfig,
@@ -150,28 +157,45 @@ func (d *DefaultSystemDialer) Dial(ctx context.Context, src net.Address, dest ne
 
 	network := dest.Network.SystemString()
 	address := dest.NetAddr()
-	var connectRetry int32 = 1
-	if sockopt != nil && sockopt.TcpConnectRetry != 0 {
-		connectRetry = sockopt.TcpConnectRetry
+
+	if connectRetry == 1 {
+		return dialer.DialContext(ctx, network, address)
 	}
 
-	var lastErr error
-	for attempt := int32(1); connectRetry < 0 || attempt <= connectRetry; attempt++ {
-		conn, err := dialer.DialContext(ctx, network, address)
-		if err == nil {
-			return conn, nil
+	cCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch := make(chan *result)
+	timer := time.NewTimer(0)
+	for {
+		select {
+		case <-ctx.Done():
+			cancel()
+			timer.Stop()
+			return nil, ctx.Err()
+		case r := <-ch:
+			cancel()
+			timer.Stop()
+			return r.conn, r.err
+		case <-timer.C:
+			if connectRetry == 0 {
+				cancel()
+				timer.Stop()
+				return nil, context.DeadlineExceeded
+			}
+			go func() {
+				conn, err := dialer.DialContext(cCtx, network, address)
+				select {
+				case ch <- &result{conn: conn, err: err}:
+				case <-cCtx.Done():
+					if conn != nil {
+						conn.Close()
+					}
+				}
+			}()
+			connectRetry--
+			timer.Reset(connectTimeout)
 		}
-		if ctx.Err() != nil {
-			return nil, err
-		}
-		if nerr, ok := err.(net.Error); !ok || !nerr.Timeout() {
-			return nil, err
-		}
-		lastErr = err
-		errors.LogDebug(ctx, "tcp connect attempt ", attempt, " timed out")
 	}
-
-	return nil, lastErr
 }
 
 func (d *DefaultSystemDialer) DestIpAddress() net.IP {
