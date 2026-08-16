@@ -161,9 +161,13 @@ message SocketConfig {
 
   repeated string trusted_x_forwarded_for = 23;
 
-  int32 tcp_connect_timeout = 24;
+  int32 tcp_connect_delay = 24;
 
-  int32 tcp_connect_retry = 25;
+  int32 tcp_connect_count = 25;
+
+  int32 tcp_connect_timeout = 26;
+
+  int32 tcp_connect_total_timeout = 27;
 }
 
 message HappyEyeballsConfig {

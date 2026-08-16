@@ -741,8 +741,10 @@ type SocketConfig struct {
 	AddressPortStrategy        AddressPortStrategy  `protobuf:"varint,21,opt,name=address_port_strategy,json=addressPortStrategy,proto3,enum=xray.transport.internet.AddressPortStrategy" json:"address_port_strategy,omitempty"`
 	HappyEyeballs              *HappyEyeballsConfig `protobuf:"bytes,22,opt,name=happy_eyeballs,json=happyEyeballs,proto3" json:"happy_eyeballs,omitempty"`
 	TrustedXForwardedFor       []string             `protobuf:"bytes,23,rep,name=trusted_x_forwarded_for,json=trustedXForwardedFor,proto3" json:"trusted_x_forwarded_for,omitempty"`
-	TcpConnectTimeout          int32                `protobuf:"varint,24,opt,name=tcp_connect_timeout,json=tcpConnectTimeout,proto3" json:"tcp_connect_timeout,omitempty"`
-	TcpConnectRetry            int32                `protobuf:"varint,25,opt,name=tcp_connect_retry,json=tcpConnectRetry,proto3" json:"tcp_connect_retry,omitempty"`
+	TcpConnectDelay            int32                `protobuf:"varint,24,opt,name=tcp_connect_delay,json=tcpConnectDelay,proto3" json:"tcp_connect_delay,omitempty"`
+	TcpConnectCount            int32                `protobuf:"varint,25,opt,name=tcp_connect_count,json=tcpConnectCount,proto3" json:"tcp_connect_count,omitempty"`
+	TcpConnectTimeout          int32                `protobuf:"varint,26,opt,name=tcp_connect_timeout,json=tcpConnectTimeout,proto3" json:"tcp_connect_timeout,omitempty"`
+	TcpConnectTotalTimeout     int32                `protobuf:"varint,27,opt,name=tcp_connect_total_timeout,json=tcpConnectTotalTimeout,proto3" json:"tcp_connect_total_timeout,omitempty"`
 	unknownFields              protoimpl.UnknownFields
 	sizeCache                  protoimpl.SizeCache
 }
@@ -938,6 +940,20 @@ func (x *SocketConfig) GetTrustedXForwardedFor() []string {
 	return nil
 }
 
+func (x *SocketConfig) GetTcpConnectDelay() int32 {
+	if x != nil {
+		return x.TcpConnectDelay
+	}
+	return 0
+}
+
+func (x *SocketConfig) GetTcpConnectCount() int32 {
+	if x != nil {
+		return x.TcpConnectCount
+	}
+	return 0
+}
+
 func (x *SocketConfig) GetTcpConnectTimeout() int32 {
 	if x != nil {
 		return x.TcpConnectTimeout
@@ -945,9 +961,9 @@ func (x *SocketConfig) GetTcpConnectTimeout() int32 {
 	return 0
 }
 
-func (x *SocketConfig) GetTcpConnectRetry() int32 {
+func (x *SocketConfig) GetTcpConnectTotalTimeout() int32 {
 	if x != nil {
-		return x.TcpConnectRetry
+		return x.TcpConnectTotalTimeout
 	}
 	return 0
 }
@@ -1072,7 +1088,8 @@ const file_transport_internet_config_proto_rawDesc = "" +
 	"\x05level\x18\x03 \x01(\tR\x05level\x12\x10\n" +
 	"\x03opt\x18\x04 \x01(\tR\x03opt\x12\x14\n" +
 	"\x05value\x18\x05 \x01(\tR\x05value\x12\x12\n" +
-	"\x04type\x18\x06 \x01(\tR\x04type\"\xe5\t\n" +
+	"\x04type\x18\x06 \x01(\tR\x04type\"\xcc\n" +
+	"\n" +
 	"\fSocketConfig\x12\x12\n" +
 	"\x04mark\x18\x01 \x01(\x05R\x04mark\x12\x10\n" +
 	"\x03tfo\x18\x02 \x01(\x05R\x03tfo\x12H\n" +
@@ -1097,9 +1114,11 @@ const file_transport_internet_config_proto_rawDesc = "" +
 	"\rcustomSockopt\x18\x14 \x03(\v2&.xray.transport.internet.CustomSockoptR\rcustomSockopt\x12`\n" +
 	"\x15address_port_strategy\x18\x15 \x01(\x0e2,.xray.transport.internet.AddressPortStrategyR\x13addressPortStrategy\x12S\n" +
 	"\x0ehappy_eyeballs\x18\x16 \x01(\v2,.xray.transport.internet.HappyEyeballsConfigR\rhappyEyeballs\x125\n" +
-	"\x17trusted_x_forwarded_for\x18\x17 \x03(\tR\x14trustedXForwardedFor\x12.\n" +
-	"\x13tcp_connect_timeout\x18\x18 \x01(\x05R\x11tcpConnectTimeout\x12*\n" +
-	"\x11tcp_connect_retry\x18\x19 \x01(\x05R\x0ftcpConnectRetry\"/\n" +
+	"\x17trusted_x_forwarded_for\x18\x17 \x03(\tR\x14trustedXForwardedFor\x12*\n" +
+	"\x11tcp_connect_delay\x18\x18 \x01(\x05R\x0ftcpConnectDelay\x12*\n" +
+	"\x11tcp_connect_count\x18\x19 \x01(\x05R\x0ftcpConnectCount\x12.\n" +
+	"\x13tcp_connect_timeout\x18\x1a \x01(\x05R\x11tcpConnectTimeout\x129\n" +
+	"\x19tcp_connect_total_timeout\x18\x1b \x01(\x05R\x16tcpConnectTotalTimeout\"/\n" +
 	"\n" +
 	"TProxyMode\x12\a\n" +
 	"\x03Off\x10\x00\x12\n" +
