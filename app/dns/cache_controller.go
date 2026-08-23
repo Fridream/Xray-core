@@ -295,7 +295,7 @@ func (c *CacheController) updateRecord(req *dnsRequest, rep *IPRecord) {
 
 	if pubRecord != nil {
 		_, ttl, err := pubRecord.getIPs()
-		if ttl > 0 && !go_errors.Is(err, errRecordNotFound) {
+		if ttl > 0 && (err == nil || go_errors.Is(err, dns_feature.ErrEmptyResponse)) {
 			c.pub.Publish(req.domain+pubSuffix, pubRecord)
 		}
 	}

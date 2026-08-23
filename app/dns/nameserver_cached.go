@@ -8,7 +8,6 @@ import (
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/common/net"
-	"github.com/xtls/xray-core/common/signal/pubsub"
 	"github.com/xtls/xray-core/features/dns"
 )
 
@@ -26,7 +25,7 @@ func queryIP(ctx context.Context, s CachedNameserver, domain string, option dns.
 	if !cache.disableCache {
 		if rec := cache.findRecords(fqdn); rec != nil {
 			ips, ttl, err := merge(option, rec.A, rec.AAAA)
-			if !go_errors.Is(err, errRecordNotFound) {
+			if err == nil || go_errors.Is(err, dns.ErrEmptyResponse) {
 				if ttl > 0 {
 					errors.LogDebugInner(ctx, err, cache.name, " cache HIT ", fqdn, " -> ", ips)
 					log.Record(&log.DNSLog{Server: cache.name, Domain: fqdn, Result: ips, Status: log.DNSCacheHit, Elapsed: 0, Error: err})
@@ -44,6 +43,7 @@ func queryIP(ctx context.Context, s CachedNameserver, domain string, option dns.
 		errors.LogDebug(ctx, "DNS cache is disabled. Querying IP for ", fqdn, " at ", cache.name)
 	}
 
+	if option.CacheCheck { go pull(ctx, s, fqdn, option); return nil, 0, nil }
 	return fetch(ctx, s, fqdn, option)
 }
 
@@ -84,35 +84,52 @@ func doFetch(ctx context.Context, s CachedNameserver, fqdn string, option dns.IP
 	defer closeSubscribers(sub4, sub6)
 
 	noResponseErrCh := make(chan error, 2)
-	onEvent := func(sub *pubsub.Subscriber) (*IPRecord, error) {
-		if sub == nil {
-			return nil, nil
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case err := <-noResponseErrCh:
-			return nil, err
-		case msg := <-sub.Wait():
-			sub.Close()
-			return msg.(*IPRecord), nil // should panic
-		}
+	pending := 0
+	var ch4, ch6 <-chan interface{}
+	if sub4 != nil {
+		ch4 = sub4.Wait()
+		pending++
+	}
+	if sub6 != nil {
+		ch6 = sub6.Wait()
+		pending++
 	}
 
 	start := time.Now()
 	s.sendQuery(ctx, noResponseErrCh, fqdn, option)
-
-	rec4, err4 := onEvent(sub4)
-	rec6, err6 := onEvent(sub6)
-
+	
+	var rec4, rec6 *IPRecord
 	var errs []error
-	if err4 != nil {
-		errs = append(errs, err4)
-	}
-	if err6 != nil {
-		errs = append(errs, err6)
-	}
 
+	for pending > 0 {
+		select {
+		case <-ctx.Done():
+			errs = append(errs, ctx.Err())
+			pending = 0
+		case err := <-noResponseErrCh:
+			errs = append(errs, err)
+			pending--
+		case msg := <-ch4:
+			sub4.Close();ch4 = nil;pending--
+			rec4 = msg.(*IPRecord)
+			if option.IPv4Prefer && len(rec4.IP) > 0 {
+				if !option.IPv6Prefer {
+					pending = 0
+					if sub6 != nil { sub6.Close() }
+				}
+			}
+		case msg := <-ch6:
+			sub6.Close();ch6 = nil;pending--
+			rec6 = msg.(*IPRecord)
+			if option.IPv6Prefer && len(rec6.IP) > 0 {
+				if !option.IPv4Prefer {
+					pending = 0
+					if sub4 != nil { sub4.Close() }
+				}
+			}
+		}
+	}
+	
 	ips, ttl, err := merge(option, rec4, rec6, errs...)
 	var rTTL uint32
 	if ttl > 0 {
@@ -131,43 +148,38 @@ func merge(option dns.IPOption, rec4 *IPRecord, rec6 *IPRecord, errs ...error) (
 	var allIPs []net.IP
 	var rTTL int32 = dns.DefaultTTL
 
-	mergeReq := option.IPv4Enable && option.IPv6Enable
+	if !option.IPv4Prefer && !option.IPv6Prefer {
+		option.IPv4Prefer, option.IPv6Prefer = option.IPv4Enable, option.IPv6Enable
+	}
 
-	if option.IPv4Enable {
+	if option.IPv4Prefer && option.IPv4Enable {
 		ips, ttl, err := rec4.getIPs() // it's safe
-		if !mergeReq || go_errors.Is(err, errRecordNotFound) {
-			return ips, ttl, err
-		}
-		if ttl < rTTL {
-			rTTL = ttl
-		}
-		if len(ips) > 0 {
-			allIPs = append(allIPs, ips...)
-		} else {
+		if err != nil {
+			if !option.IPv6Enable || !go_errors.Is(err, dns.ErrEmptyResponse) { return ips, ttl, err }
 			errs = append(errs, err)
+		} else {
+			if !option.IPv6Prefer { return ips, ttl, err }
+			if ttl < rTTL { rTTL = ttl }
+			allIPs = append(allIPs, ips...)
 		}
 	}
 
-	if option.IPv6Enable {
+	if option.IPv6Prefer && option.IPv6Enable {
 		ips, ttl, err := rec6.getIPs() // it's safe
-		if !mergeReq || go_errors.Is(err, errRecordNotFound) {
-			return ips, ttl, err
-		}
-		if ttl < rTTL {
-			rTTL = ttl
-		}
-		if len(ips) > 0 {
-			allIPs = append(allIPs, ips...)
-		} else {
+		if err != nil {
+			if !option.IPv4Enable || !go_errors.Is(err, dns.ErrEmptyResponse) { return ips, ttl, err }
 			errs = append(errs, err)
+		} else {
+			if !option.IPv4Prefer { return ips, ttl, err }
+			if ttl < rTTL { rTTL = ttl }
+			allIPs = append(allIPs, ips...)
 		}
 	}
 
-	if len(allIPs) > 0 {
-		return allIPs, rTTL, nil
-	}
-	if len(errs) == 2 && go_errors.Is(errs[0], errs[1]) {
-		return nil, rTTL, errs[0]
-	}
+	if option.IPv4Prefer && !option.IPv6Prefer { return rec6.getIPs() }
+	if option.IPv6Prefer && !option.IPv4Prefer { return rec4.getIPs() }
+	if len(allIPs) > 0 { return allIPs, rTTL, nil }
+
+	if len(errs) == 2 && go_errors.Is(errs[0], errs[1]) { return nil, rTTL, errs[0] }
 	return nil, rTTL, errors.Combine(errs...)
 }
