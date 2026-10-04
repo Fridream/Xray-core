@@ -387,7 +387,7 @@ func (s *DNS) serialQuery(domain string, option dns.IPOption) ([]net.IP, uint32,
 }
 
 func (s *DNS) groupCacheCheck(domain string, option dns.IPOption, clients []*Client) ([]net.IP, uint32, bool) {
-	var merged []net.IP
+	var prefer, merged[]net.IP
 	var minTTL uint32 = dns.DefaultTTL
 
 	option.CacheCheck = true // cache check mode, no wait
@@ -407,11 +407,15 @@ func (s *DNS) groupCacheCheck(domain string, option dns.IPOption, clients []*Cli
 					if m.Equal(ip) { continue nextIP }
 				}
 				merged = append(merged, ip)
+				if (option.IPv6Prefer && ip.To4() == nil) || (option.IPv4Prefer && ip.To4() != nil) {
+					prefer = append(prefer, ip)
+				}
 			}
 		}
 	}
 
 	if len(merged) == 0 { return nil, 0, false }
+	if len(prefer) != 0 { merged = prefer }
 	return merged, minTTL, true
 }
 
@@ -497,9 +501,7 @@ func asyncQueryAll(domain string, option dns.IPOption, clients []*Client, ctx co
 			continue
 		}
 
-		started := make(chan struct{})
 		go func(i int, c *Client) {
-			close(started)
 			qctx := ctx
 			if !c.server.IsDisableCache() {
 				nctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.timeoutMs*2)
@@ -509,7 +511,6 @@ func asyncQueryAll(domain string, option dns.IPOption, clients []*Client, ctx co
 			ips, ttl, err := c.QueryIP(qctx, domain, option)
 			ch <- queryResult{ips: ips, ttl: ttl, err: err, index: i}
 		}(i, client)
-		<-started
 	}
 	return ch
 }
