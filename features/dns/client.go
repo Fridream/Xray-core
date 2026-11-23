@@ -10,8 +10,11 @@ import (
 // IPOption is an object for IP query options.
 type IPOption struct {
 	IPv4Enable bool
+	IPv4Prefer bool
 	IPv6Enable bool
+	IPv6Prefer bool
 	FakeEnable bool
+	CacheCheck bool
 }
 
 // Client is a Xray feature for querying DNS information.

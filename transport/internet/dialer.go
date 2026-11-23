@@ -90,17 +90,11 @@ func LookupForIP(domain string, strategy DomainStrategy, localAddr net.Address) 
 	}
 
 	ips, _, err := dnsClient.LookupIP(domain, dns.IPOption{
-		IPv4Enable: (localAddr == nil && strategy.PreferIP4()) || (localAddr != nil && localAddr.Family().IsIPv4() && (strategy.PreferIP4() || strategy.FallbackIP4())),
-		IPv6Enable: (localAddr == nil && strategy.PreferIP6()) || (localAddr != nil && localAddr.Family().IsIPv6() && (strategy.PreferIP6() || strategy.FallbackIP6())),
+		IPv4Enable: (strategy.PreferIP4() || strategy.FallbackIP4()) && (localAddr == nil || localAddr.Family().IsIPv4()),
+		IPv4Prefer: strategy.PreferIP4(),
+		IPv6Enable: (strategy.PreferIP6() || strategy.FallbackIP6()) && (localAddr == nil || localAddr.Family().IsIPv6()),
+		IPv6Prefer: strategy.PreferIP6(),
 	})
-	{ // Resolve fallback
-		if (len(ips) == 0 || err != nil) && strategy.HasFallback() && localAddr == nil {
-			ips, _, err = dnsClient.LookupIP(domain, dns.IPOption{
-				IPv4Enable: strategy.FallbackIP4(),
-				IPv6Enable: strategy.FallbackIP6(),
-			})
-		}
-	}
 
 	if err == nil && len(ips) == 0 {
 		return nil, dns.ErrEmptyResponse

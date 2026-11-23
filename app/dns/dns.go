@@ -425,13 +425,52 @@ func (s *DNS) serialQuery(domain string, option dns.IPOption) ([]net.IP, uint32,
 	return nil, 0, mergeQueryErrors(domain, errs)
 }
 
+func (s *DNS) groupCacheCheck(domain string, option dns.IPOption, clients []*Client) ([]net.IP, uint32, bool) {
+	var prefer, merged[]net.IP
+	var minTTL uint32 = dns.DefaultTTL
+
+	option.CacheCheck = true // cache check mode, no wait
+	for _, client := range clients {
+		if strings.EqualFold(client.Name(), "FakeDNS") { // FakeDNS has the highest priority
+			if option.FakeEnable {
+				ips, ttl, err := client.QueryIP(s.ctx, domain, option)
+				if err == nil && len(ips) > 0 { return ips, ttl, true }
+			}
+		} else {
+			ips, ttl, err := client.QueryIP(s.ctx, domain, option)
+			if err != nil || len(ips) == 0 { continue } // err is err; zero length maybe no cache
+			if ttl < minTTL { minTTL = ttl }
+			nextIP:
+			for _, ip := range ips {
+				for _, m := range merged {
+					if m.Equal(ip) { continue nextIP }
+				}
+				merged = append(merged, ip)
+				if (option.IPv6Prefer && ip.To4() == nil) || (option.IPv4Prefer && ip.To4() != nil) {
+					prefer = append(prefer, ip)
+				}
+			}
+		}
+	}
+
+	if len(merged) == 0 { return nil, 0, false }
+	if len(prefer) != 0 { merged = prefer }
+	return merged, minTTL, true
+}
+
 func (s *DNS) parallelQuery(domain string, option dns.IPOption) ([]net.IP, uint32, error) {
 	var errs []error
 	clients := s.sortClients(domain)
 
+	groups, groupOf := makeGroups( /*s.ctx,*/ clients)
+
+	for _, g := range groups {
+		ips, ttl, ok := s.groupCacheCheck(domain, option, clients[g.start:g.end+1])
+		if ok { return ips, ttl, nil }
+	}
+
 	resultsChan := asyncQueryAll(domain, option, clients, s.ctx)
 
-	groups, groupOf := makeGroups( /*s.ctx,*/ clients)
 	results := make([]*queryResult, len(clients))
 	pending := make([]int, len(groups))
 	for gi, g := range groups {
