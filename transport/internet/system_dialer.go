@@ -112,6 +112,25 @@ func (d *DefaultSystemDialer) Dial(ctx context.Context, src net.Address, dest ne
 			Dest:       destAddr,
 		}, nil
 	}
+	connectCount := int32(1)
+	connectTimeout := time.Second * 16
+	connectDelay := connectTimeout
+	connectTotalTimeout := connectTimeout
+	if sockopt != nil {
+		if sockopt.TcpConnectCount > 0 {
+			connectCount = sockopt.TcpConnectCount
+		}
+		if sockopt.TcpConnectTimeout > 0 {
+			connectTimeout = time.Millisecond * time.Duration(sockopt.TcpConnectTimeout)
+			connectDelay = connectTimeout
+		}
+		if sockopt.TcpConnectDelay > 0 {
+			connectDelay = time.Millisecond * time.Duration(sockopt.TcpConnectDelay)
+		}
+		if sockopt.TcpConnectTotalTimeout > 0 {
+			connectTotalTimeout = time.Millisecond * time.Duration(sockopt.TcpConnectTotalTimeout)
+		}
+	}
 	// Chrome defaults
 	keepAliveConfig := net.KeepAliveConfig{
 		Enable:   true,
@@ -136,7 +155,7 @@ func (d *DefaultSystemDialer) Dial(ctx context.Context, src net.Address, dest ne
 		}
 	}
 	dialer := &net.Dialer{
-		Timeout:         time.Second * 16,
+		Timeout:         connectTimeout,
 		LocalAddr:       resolveSrcAddr(dest.Network, src),
 		KeepAlive:       keepAlive,
 		KeepAliveConfig: keepAliveConfig,
@@ -171,7 +190,54 @@ func (d *DefaultSystemDialer) Dial(ctx context.Context, src net.Address, dest ne
 		}
 	}
 
-	return dialer.DialContext(ctx, dest.Network.SystemString(), dest.NetAddr())
+	network := dest.Network.SystemString()
+	address := dest.NetAddr()
+
+	if connectCount == 1 {
+		return dialer.DialContext(ctx, network, address)
+	}
+
+	cCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch := make(chan *result)
+	timer := time.NewTimer(0)
+	totalTimer := time.NewTimer(connectTotalTimeout)
+	for {
+		select {
+		case <-ctx.Done():
+			cancel()
+			timer.Stop()
+			totalTimer.Stop()
+			return nil, ctx.Err()
+		case <-totalTimer.C:
+			cancel()
+			timer.Stop()
+			return nil, context.DeadlineExceeded
+		case r := <-ch:
+			if nerr, ok := r.err.(net.Error); ok && nerr.Timeout() {
+				continue
+			}
+			cancel()
+			timer.Stop()
+			totalTimer.Stop()
+			return r.conn, r.err
+		case <-timer.C:
+			connectCount--
+			if connectCount > 0 {
+				timer.Reset(connectDelay)
+			}
+			go func() {
+				conn, err := dialer.DialContext(cCtx, network, address)
+				select {
+				case ch <- &result{conn: conn, err: err}:
+				case <-cCtx.Done():
+					if conn != nil {
+						conn.Close()
+					}
+				}
+			}()
+		}
+	}
 }
 
 func (d *DefaultSystemDialer) DestIpAddress() net.IP {
