@@ -122,9 +122,9 @@ func (r *Router) ReloadRules(config *Config, shouldAppend bool) error {
 		newBalancers[rule.Tag] = balancer
 	}
 
-	for _, rule := range config.Rule {
+	for i, rule := range config.Rule {
 		cond, err := rule.BuildCondition()
-		if err != nil {
+		if err != nil && i != len(config.Rule)-1 {
 			return err
 		}
 		rr := &Rule{

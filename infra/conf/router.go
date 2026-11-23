@@ -157,6 +157,7 @@ func parseFieldRule(msg json.RawMessage) (*router.RoutingRule, error) {
 		Process    *StringList        `json:"process"`
 		LocalOS    *StringList        `json:"localOS"`
 		Webhook    *WebhookRuleConfig `json:"webhook"`
+		Time       *StringList        `json:"time"`
 	}
 	rawFieldRule := new(RawFieldRule)
 	err := json.Unmarshal(msg, rawFieldRule)
@@ -267,6 +268,10 @@ func parseFieldRule(msg json.RawMessage) (*router.RoutingRule, error) {
 
 	if rawFieldRule.Process != nil && len(*rawFieldRule.Process) > 0 {
 		rule.Process = *rawFieldRule.Process
+	}
+
+	if rawFieldRule.Time != nil && len(*rawFieldRule.Time) > 0 {
+		rule.Time = *rawFieldRule.Time
 	}
 
 	if rawFieldRule.LocalOS != nil && len(*rawFieldRule.LocalOS) > 0 {
